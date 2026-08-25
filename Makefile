@@ -15,7 +15,7 @@ VERSION  ?= 0.1.0
 COMMIT   := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DIRTY    := $(shell git diff --quiet -- cmd internal go.mod go.sum 2>/dev/null || echo -dirty)
 DIST     := dist/$(VERSION)
-SIGN_KEY ?= $(HOME)/.ssh/id_ed25519_sk
+SIGN_KEY ?= release-key.pub
 NAMESPACE := ussh-fsmonitor
 
 ldflags = -s -w \
