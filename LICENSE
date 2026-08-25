@@ -1,0 +1,111 @@
+ussh-fsmonitor Source-Available License, Version 1.0
+
+Copyright (c) 2026 Ivar Hosteng. All rights reserved.
+
+1. Definitions.
+
+   "Software" means ussh-fsmonitor and the source code, binaries, scripts,
+   configuration templates, and documentation made available in this
+   repository.
+
+   "uSSH" means the uSSH application (formerly developed
+   as MacTerm) published by Ivar Hosteng for macOS, iOS, and iPadOS,
+   including future versions, point releases, and renames.
+
+   "You" means an individual or legal entity exercising rights under
+   this License.
+
+2. Inspection.
+
+   You may view, clone, fork (for personal inspection), and download
+   the Software for the purposes of:
+   (a) inspecting and auditing its security, correctness, and behavior;
+   (b) building it from source to verify that published binaries
+       correspond to the published source.
+
+3. Permitted Use.
+
+   You may install and operate the Software solely as the backend
+   service for one or more installations of uSSH. Use by an
+   end user to manage their own DNS infrastructure through uSSH
+   is permitted. No other use is granted by this License.
+
+4. Restrictions.
+
+   Except as expressly permitted in Sections 2 and 3, You may not:
+   (a) use the Software for any purpose other than serving uSSH;
+   (b) distribute the Software, in modified or unmodified form, except
+       as part of a contribution back to this repository under Section 5;
+   (c) incorporate the Software, in whole or in part, into any other
+       application, service, library, or product;
+   (d) offer the Software, or any service built on or using the
+       Software, to third parties on a commercial basis;
+   (e) remove, alter, or obscure any copyright, license, attribution,
+       or other proprietary notices in the Software;
+   (f) sublicense or transfer the Software or any rights under this
+       License.
+
+5. Contributions.
+
+   By submitting a pull request, patch, change, suggestion, or other
+   contribution ("Contribution") to this repository, You grant Ivar
+   Hosteng a perpetual, worldwide, non-exclusive, royalty-free,
+   irrevocable, sublicensable license to reproduce, modify, prepare
+   derivative works of, publicly display, publicly perform,
+   distribute, and relicense Your Contribution under this License and
+   under any other license, including commercial and open-source
+   licenses, with or without attribution. You represent that You have
+   the right to grant this license for each Contribution You submit.
+
+6. Third-Party Components.
+
+   The Software incorporates third-party components that are licensed
+   under their own terms; see THIRD_PARTY_LICENSES.md. Your rights to
+   those components are governed solely by their respective licenses
+   and not by this License.
+
+7. Trademarks.
+
+   This License does not grant permission to use the trade names,
+   trademarks, service marks, logos, or product names of Ivar Hosteng,
+   uSSH, DnsEditor, or ussh-fsmonitor, except as required for
+   reasonable and customary use in describing the origin of the
+   Software.
+
+8. No Warranty.
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+   EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND
+   NONINFRINGEMENT.
+
+9. Limitation of Liability.
+
+   IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM,
+   DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+   TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH
+   THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+10. Termination.
+
+    This License terminates automatically upon any breach by You.
+    Upon termination, You must cease all use of the Software and
+    destroy all copies in Your possession or control. Sections 5, 6,
+    7, 8, 9, and 11 survive termination.
+
+11. Commercial Licensing.
+
+    For any use of the Software not permitted by this License —
+    including but not limited to bundling the Software with another
+    application, providing the Software as a hosted or managed
+    service, or distributing modified versions — contact:
+
+        licensing@dnsedit.au
+
+12. Governing Law.
+
+    This License shall be governed by and construed in accordance
+    with the laws of Australia, without regard to its conflict of
+    laws principles.
+
+SPDX-License-Identifier: LicenseRef-ussh-fsmonitor-SAL-1.0
