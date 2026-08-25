@@ -5,6 +5,7 @@
 #   make release      all targets into dist/<VERSION>/ with statements
 #   make sign         sign every statement on the YubiKey (dnseditd cmd/sign --gpg)
 #   make verify       verify every statement + binary with ./cmd/verify
+#   make dns          print the DNS records a release needs
 #
 # Release binaries are stamped with VERSION, TARGET and the git commit
 # ("-dirty" if the tree isn't clean). uSSH compares `--version` output on a
@@ -40,6 +41,22 @@ selftest: dev
 
 release: darwin linux statements
 	@echo; echo "release $(VERSION) ($(COMMIT)$(DIRTY)) in $(DIST):"; ls -l $(DIST)
+	@$(MAKE) --no-print-directory dns
+
+# uSSH cannot write DNS itself (no dnseditd behind it), so every release
+# prints the records to publish by hand. The pointer is what uSSH resolves
+# — DNSSEC-validated — to learn the current version before it downloads
+# from https://ussh.au/fsmonitor/<version>/; the key record already exists
+# and only changes on rotation.
+dns:
+	@echo
+	@echo "DNS records to publish (zone ussh.au, DNSSEC-signed):"
+	@echo
+	@echo "_release._ussh-fsmonitor.ussh.au. 300 IN TXT \"version=$(VERSION) protocol=$$(go run ./cmd/ussh-fsmonitor --version 2>/dev/null | awk '/^protocol/{print $$2}') built=$$(date -u +%Y-%m-%d)\""
+	@echo
+	@echo "Unchanged unless the key rotates (zone dnsedit.au):"
+	@echo "_signing._dnseditd.dnsedit.au. TXT \"pubkey=$(RELEASE_KEY)\""
+	@echo
 
 darwin:
 	@mkdir -p $(DIST) build
