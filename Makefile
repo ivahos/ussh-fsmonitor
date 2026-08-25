@@ -66,12 +66,19 @@ statements:
 	    > $$f.statement; \
 	done; ls $(DIST)/*.statement
 
+# Same ritual as dnseditd's make-installer.sh: pinentry needs GPG_TTY,
+# scdaemon is woken with SCD SERIALNO before the first signature, and the
+# card is locked again afterwards so the next signing needs the PIN.
 sign:
 	@test -d "$(SIGN_TOOL)" || { echo "SIGN_TOOL=$(SIGN_TOOL) not found"; exit 1; }
-	@for st in $(DIST)/*.statement; do \
+	@export GPG_TTY=$$(tty); \
+	gpg-connect-agent "SCD SERIALNO" /bye 2>/dev/null | grep -q '^OK' || { echo "no YubiKey/GPG smart card detected"; exit 1; }; \
+	for st in $(DIST)/*.statement; do \
 	  grep -q '^__SIGNATURE__$$' $$st && { echo "already signed: $$st"; continue; }; \
-	  (cd $(SIGN_TOOL) && go run . --sign --gpg --file $(CURDIR)/$$st) && echo "signed $$st"; \
-	done
+	  (cd $(SIGN_TOOL) && go run . --sign --gpg --file $(CURDIR)/$$st) || { echo "signing failed: $$st"; exit 1; }; \
+	  echo "signed $$st"; \
+	done; \
+	gpg-connect-agent "RELOADAGENT" /bye >/dev/null 2>&1; gpgconf --kill scdaemon 2>/dev/null; true
 
 verify:
 	@for st in $(DIST)/*.statement; do \
