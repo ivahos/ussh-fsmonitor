@@ -57,22 +57,36 @@ commit 3f9c2a1
 
 ## Releases and verification
 
-Each release binary ships with a `.statement` (name, version, protocol,
-target, SHA-256, date) and a `.statement.sig`, an OpenSSH `SSHSIG`
-signature over the statement made with the release key
-(`ssh-keygen -Y sign -n ussh-fsmonitor`). uSSH verifies the signature
-against a public key built into the app, checks the digest, and only
-then pushes the binary to a host — where it runs `--version` and compares
-the answer to the statement. You can do the same with stock OpenSSH:
+Each release binary ships with a `.statement` sidecar:
 
 ```
-ssh-keygen -Y verify -f allowed_signers -I ussh-release -n ussh-fsmonitor \
-    -s ussh-fsmonitor-linux-amd64.statement.sig < ussh-fsmonitor-linux-amd64.statement
-shasum -a 256 ussh-fsmonitor-linux-amd64      # must match the statement
+ussh-fsmonitor 1.0.0
+protocol 1
+target linux-amd64
+commit 3f9c2a1
+sha256 29d808b8…
+built 2026-09-02
+__SIGNATURE__
+<base64 Ed25519 signature>
 ```
 
-`allowed_signers` is one line: `ussh-release namespaces="ussh-fsmonitor" ssh-ed25519 AAAA…`
-with the release public key (published at https://ussh.au/fsmonitor/).
+The signature is Ed25519 over the SHA-256 of everything before the
+`__SIGNATURE__` line — the same scheme dnseditd installers use, made with
+the same key on a hardware token. The public key is not in this repo: it
+is published, DNSSEC-signed, as
+`_signing._dnseditd.dnsedit.au TXT "pubkey=<hex>"` (with
+`outgoing_pubkey=` alongside during a key rotation). uSSH resolves and
+validates that record with its own DNSSEC resolver every time it verifies
+a statement, checks the digest, and only then pushes the binary to a host
+— where `--version` must match the statement's first four lines.
+
+Verify a release yourself with stock tools:
+
+```
+dig +short TXT _signing._dnseditd.dnsedit.au           # the key (use a validating resolver)
+go run ./cmd/verify --pub <hex> --statement ussh-fsmonitor-linux-amd64.statement \
+                    --binary ussh-fsmonitor-linux-amd64
+```
 
 ## License
 

@@ -3,8 +3,8 @@
 #   make              build for this machine into ./bin (dev)
 #   make selftest     build + run the watcher self-test here
 #   make release      all targets into dist/<VERSION>/ with statements
-#   make sign         SSHSIG-sign every statement with SIGN_KEY (YubiKey touch)
-#   make verify       check every signature with stock ssh-keygen
+#   make sign         sign every statement on the YubiKey (dnseditd cmd/sign --gpg)
+#   make verify       verify every statement + binary with ./cmd/verify
 #
 # Release binaries are stamped with VERSION, TARGET and the git commit
 # ("-dirty" if the tree isn't clean). uSSH compares `--version` output on a
@@ -15,8 +15,12 @@ VERSION  ?= 0.1.0
 COMMIT   := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DIRTY    := $(shell git diff --quiet -- cmd internal go.mod go.sum 2>/dev/null || echo -dirty)
 DIST     := dist/$(VERSION)
-SIGN_KEY ?= release-key.pub
-NAMESPACE := ussh-fsmonitor
+# Signing uses the same Ed25519 key and format as dnseditd installers:
+# SHA-256 of the statement, Ed25519-signed on the YubiKey (GPG smart card),
+# signature appended after a __SIGNATURE__ marker. The signer lives in the
+# private dnseditd tree; the public verifier is ./cmd/verify.
+SIGN_TOOL   ?= $(HOME)/Desktop/Xcode/DnsEditor/dnseditd/cmd/sign
+RELEASE_KEY := $(shell cat RELEASE_KEY.hex)
 
 ldflags = -s -w \
   -X $(MODULE)/internal/version.Version=$(VERSION) \
@@ -63,15 +67,15 @@ statements:
 	done; ls $(DIST)/*.statement
 
 sign:
-	@test -f "$(SIGN_KEY)" || { echo "SIGN_KEY=$(SIGN_KEY) not found"; exit 1; }
-	@for s in $(DIST)/*.statement; do \
-	  ssh-keygen -Y sign -f $(SIGN_KEY) -n $(NAMESPACE) $$s && echo "signed $$s"; \
+	@test -d "$(SIGN_TOOL)" || { echo "SIGN_TOOL=$(SIGN_TOOL) not found"; exit 1; }
+	@for st in $(DIST)/*.statement; do \
+	  grep -q '^__SIGNATURE__$$' $$st && { echo "already signed: $$st"; continue; }; \
+	  (cd $(SIGN_TOOL) && go run . --sign --gpg --file $(CURDIR)/$$st) && echo "signed $$st"; \
 	done
 
-# allowed_signers: "ussh-release namespaces="ussh-fsmonitor" ssh-ed25519 AAAA..."
 verify:
-	@for s in $(DIST)/*.statement; do \
-	  ssh-keygen -Y verify -f allowed_signers -I ussh-release -n $(NAMESPACE) -s $$s.sig < $$s && echo "ok $$s"; \
+	@for st in $(DIST)/*.statement; do \
+	  go run ./cmd/verify --pub $(RELEASE_KEY) --statement $$st --binary $${st%.statement}; \
 	done
 
 clean:
