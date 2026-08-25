@@ -4,6 +4,7 @@ package watch
 
 /*
 #cgo LDFLAGS: -framework CoreServices
+#include <stdlib.h>
 #include <CoreServices/CoreServices.h>
 #include <dispatch/dispatch.h>
 
@@ -15,16 +16,22 @@ static void bridge(ConstFSEventStreamRef stream, void *info, size_t n,
 	usshFSEventsCallback((uintptr_t)info, n, (char **)eventPaths, (unsigned int *)flags);
 }
 
-static FSEventStreamRef ussh_stream_start(uintptr_t handle, const char *root, double latency) {
-	CFStringRef s = CFStringCreateWithCString(NULL, root, kCFStringEncodingUTF8);
-	CFArrayRef paths = CFArrayCreate(NULL, (const void **)&s, 1, &kCFTypeArrayCallBacks);
+// ussh_stream_start watches every path in roots[0..n): the tree root plus each
+// followed symlink target (FSEvents does not descend symlinks, so their
+// targets are watched as their own roots).
+static FSEventStreamRef ussh_stream_start(uintptr_t handle, char **roots, int n, double latency) {
+	CFStringRef *strs = malloc(sizeof(CFStringRef) * n);
+	for (int i = 0; i < n; i++)
+		strs[i] = CFStringCreateWithCString(NULL, roots[i], kCFStringEncodingUTF8);
+	CFArrayRef paths = CFArrayCreate(NULL, (const void **)strs, n, &kCFTypeArrayCallBacks);
 	FSEventStreamContext ctx = {0, (void *)handle, NULL, NULL, NULL};
 	FSEventStreamRef stream = FSEventStreamCreate(NULL, bridge, &ctx, paths,
 		kFSEventStreamEventIdSinceNow, latency,
 		kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer |
 		kFSEventStreamCreateFlagWatchRoot);
 	CFRelease(paths);
-	CFRelease(s);
+	for (int i = 0; i < n; i++) CFRelease(strs[i]);
+	free(strs);
 	if (stream == NULL) return NULL;
 	dispatch_queue_t q = dispatch_queue_create("au.ussh.fsmonitor", DISPATCH_QUEUE_SERIAL);
 	FSEventStreamSetDispatchQueue(stream, q);
@@ -57,25 +64,69 @@ import (
 // own latency does the first round of batching and the Coalescer the
 // second. Renames arrive as ItemRenamed on both the old and the new path
 // with no pairing, so each path is classified by whether it exists now.
+//
+// FSEvents never descends symlinks, so out-of-tree targets of symlinks found
+// under the root are added to the stream as their own watch roots (discovered
+// by a walk at start); their events are rewritten onto the link path by the
+// shared linkFollower. Symlinks created after the feed starts are picked up on
+// the next feed cycle rather than mid-stream (uSSH restarts feeds often).
 type fseventsWatcher struct {
 	root string
+	lf   *linkFollower
 	logf func(string, ...any)
 	out  chan<- Change
 }
 
 func New(root string, logf func(string, ...any)) (Watcher, error) {
-	return &fseventsWatcher{root: root, logf: logf}, nil
+	return &fseventsWatcher{root: root, lf: newLinkFollower(root), logf: logf}, nil
 }
 
-func (w *fseventsWatcher) Caps() []string { return []string{"fsevents"} }
+func (w *fseventsWatcher) Caps() []string {
+	caps := []string{"fsevents"}
+	if w.lf.Partial() {
+		caps = append(caps, "partial")
+	}
+	return caps
+}
+
+// discoverTargets walks the tree once to find symlinks-to-directories that
+// point out of it, registering each with the follower and collecting the
+// resolved targets to watch. A single hop: targets themselves are not walked
+// for further symlinks.
+func (w *fseventsWatcher) discoverTargets() []string {
+	var targets []string
+	_ = filepath.WalkDir(w.root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			if target, watch := w.lf.consider(p); watch {
+				targets = append(targets, target)
+			}
+		}
+		return nil
+	})
+	return targets
+}
 
 func (w *fseventsWatcher) Run(ctx context.Context, out chan<- Change) error {
 	w.out = out
 	h := cgo.NewHandle(w)
 	defer h.Delete()
-	croot := C.CString(w.root)
-	defer C.free(unsafe.Pointer(croot))
-	stream := C.ussh_stream_start(C.uintptr_t(h), croot, C.double(0.1))
+
+	roots := append([]string{w.root}, w.discoverTargets()...)
+	cstrs := make([]*C.char, len(roots))
+	for i, r := range roots {
+		cstrs[i] = C.CString(r)
+	}
+	defer func() {
+		for _, c := range cstrs {
+			C.free(unsafe.Pointer(c))
+		}
+	}()
+
+	stream := C.ussh_stream_start(C.uintptr_t(h),
+		(**C.char)(unsafe.Pointer(&cstrs[0])), C.int(len(cstrs)), C.double(0.1))
 	if stream == nil {
 		return errors.New("FSEventStreamCreate/Start failed")
 	}
@@ -104,14 +155,16 @@ func usshFSEventsCallback(handle C.uintptr_t, n C.size_t, paths **C.char, flags 
 			continue
 		}
 		abs := filepath.Clean(C.GoString(cpaths[i]))
-		rel := Relative(w.root, abs)
-		if rel == "" {
+		rels := w.lf.rel(abs) // root-relative, or link-relative under a followed target
+		if len(rels) == 0 {
 			continue
 		}
+		kind := Modified
 		if _, err := os.Lstat(abs); err != nil {
-			w.out <- Change{Kind: Deleted, Path: rel}
-		} else {
-			w.out <- Change{Kind: Modified, Path: rel}
+			kind = Deleted
+		}
+		for _, rel := range rels {
+			w.out <- Change{Kind: kind, Path: rel}
 		}
 	}
 }

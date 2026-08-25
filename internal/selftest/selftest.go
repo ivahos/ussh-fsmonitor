@@ -22,6 +22,20 @@ func Run(logf func(string, ...any)) error {
 	defer os.RemoveAll(dir)
 	dir, _ = filepath.EvalSymlinks(dir) // /var → /private/var on macOS
 
+	// An out-of-tree directory reached through a symlink inside the root: the
+	// watcher must follow it and rewrite its events onto the link path. The
+	// link has to exist before the watch starts (that is when targets are
+	// discovered).
+	target, err := os.MkdirTemp("", "ussh-fsmonitor-selftest-target-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(target)
+	target, _ = filepath.EvalSymlinks(target)
+	if err := os.Symlink(target, filepath.Join(dir, "linked")); err != nil {
+		return err
+	}
+
 	w, err := watch.New(dir, logf)
 	if err != nil {
 		return err
@@ -53,6 +67,7 @@ func Run(logf func(string, ...any)) error {
 	must(os.WriteFile(filepath.Join(dir, "sub", "deep", "b.txt"), []byte("two"), 0o644))
 	must(os.Rename(filepath.Join(dir, "a.txt"), filepath.Join(dir, "c.txt")))
 	must(os.Remove(filepath.Join(dir, "sub", "deep", "b.txt")))
+	must(os.WriteFile(filepath.Join(target, "t.txt"), []byte("via link"), 0o644))
 
 	time.Sleep(1500 * time.Millisecond) // FSEvents latency + coalescing headroom
 	cancel()
@@ -67,6 +82,7 @@ func Run(logf func(string, ...any)) error {
 		"a.txt":          watch.Deleted,
 		"sub":            watch.Modified,
 		"sub/deep/b.txt": watch.Deleted,
+		"linked/t.txt":   watch.Modified, // event in the out-of-tree target, via the symlink
 	}
 	var failures []string
 	for p, k := range expect {

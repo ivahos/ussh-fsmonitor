@@ -33,6 +33,7 @@ type inotifyWatcher struct {
 	paths   map[string]int // absolute dir -> wd
 	limit   int
 	partial bool
+	lf      *linkFollower
 	logf    func(string, ...any)
 }
 
@@ -43,7 +44,8 @@ func New(root string, logf func(string, ...any)) (Watcher, error) {
 		return nil, fmt.Errorf("inotify_init: %w", err)
 	}
 	w := &inotifyWatcher{root: root, fd: fd, wd: map[int]string{},
-		paths: map[string]int{}, limit: readWatchLimit(), logf: logf}
+		paths: map[string]int{}, limit: readWatchLimit(),
+		lf: newLinkFollower(root), logf: logf}
 	return w, nil
 }
 
@@ -61,22 +63,48 @@ func readWatchLimit() int {
 
 func (w *inotifyWatcher) Caps() []string {
 	caps := []string{"inotify"}
-	if w.partial {
+	if w.partial || w.lf.Partial() {
 		caps = append(caps, "partial")
 	}
 	return caps
 }
 
+// emit sends a change for every protocol path an absolute path resolves to —
+// one when it is under the root, one per followed symlink otherwise (see
+// linkFollower.rel).
+func (w *inotifyWatcher) emit(out chan<- Change, kind Kind, abs string) {
+	for _, r := range w.lf.rel(abs) {
+		out <- Change{Kind: kind, Path: r}
+	}
+}
+
 // addTree watches dir and every directory below it. Files that already
 // exist are not reported — the consumer enumerates on start anyway.
-func (w *inotifyWatcher) addTree(dir string, out chan<- Change, report bool) {
+// followLinks follows symlinks-to-directories out of the tree (their targets
+// are watched too and their events rewritten onto the link path); it is off
+// when walking a followed target, keeping following to a single hop.
+func (w *inotifyWatcher) addTree(dir string, out chan<- Change, report, followLinks bool) {
 	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil // unreadable subtree: skip, keep going
 		}
+		if d.Type()&os.ModeSymlink != 0 {
+			// A symlink is never descended by WalkDir (it Lstats); surface it
+			// like any other entry, then follow it if it points to a directory
+			// out of the tree.
+			if report {
+				w.emit(out, Modified, p)
+			}
+			if followLinks {
+				if target, watch := w.lf.consider(p); watch {
+					w.addTree(target, out, false, false)
+				}
+			}
+			return nil
+		}
 		if !d.IsDir() {
 			if report {
-				out <- Change{Kind: Modified, Path: Relative(w.root, p)}
+				w.emit(out, Modified, p)
 			}
 			return nil
 		}
@@ -102,7 +130,7 @@ func (w *inotifyWatcher) addTree(dir string, out chan<- Change, report bool) {
 		w.wd[wd] = p
 		w.paths[p] = wd
 		if report && p != dir {
-			out <- Change{Kind: Modified, Path: Relative(w.root, p)}
+			w.emit(out, Modified, p)
 		}
 		return nil
 	})
@@ -123,7 +151,7 @@ func (w *inotifyWatcher) remove(dir string) {
 
 func (w *inotifyWatcher) Run(ctx context.Context, out chan<- Change) error {
 	defer unix.Close(w.fd)
-	w.addTree(w.root, out, false)
+	w.addTree(w.root, out, false, true)
 
 	// Wake the blocking poll when ctx ends.
 	pipeR, pipeW, err := os.Pipe()
@@ -183,27 +211,36 @@ func (w *inotifyWatcher) dispatch(b []byte, out chan<- Change) {
 				continue
 			}
 			w.remove(dir)
-			out <- Change{Kind: Deleted, Path: Relative(w.root, dir)}
+			w.emit(out, Deleted, dir)
 			continue
 		}
 		if mask&unix.IN_IGNORED != 0 || name == "" {
 			continue
 		}
 		abs := filepath.Join(dir, name)
-		rel := Relative(w.root, abs)
 		switch {
 		case mask&(unix.IN_DELETE|unix.IN_MOVED_FROM) != 0:
 			if mask&unix.IN_ISDIR != 0 {
 				w.remove(abs)
 			}
-			out <- Change{Kind: Deleted, Path: rel}
+			w.emit(out, Deleted, abs)
 		case mask&(unix.IN_CREATE|unix.IN_MOVED_TO) != 0 && mask&unix.IN_ISDIR != 0:
 			// A new directory may already contain files created before the
 			// watch existed (mkdir -p, untar, git checkout): report them.
-			out <- Change{Kind: Modified, Path: rel}
-			w.addTree(abs, out, true)
+			w.emit(out, Modified, abs)
+			w.addTree(abs, out, true, true)
 		default:
-			out <- Change{Kind: Modified, Path: rel}
+			w.emit(out, Modified, abs)
+			// A symlink appears as a non-directory create; if it points to a
+			// directory out of the tree, start following it now and surface
+			// what it already holds.
+			if mask&(unix.IN_CREATE|unix.IN_MOVED_TO) != 0 {
+				if fi, err := os.Lstat(abs); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+					if target, watch := w.lf.consider(abs); watch {
+						w.addTree(target, out, true, false)
+					}
+				}
+			}
 		}
 	}
 }

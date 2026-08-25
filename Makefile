@@ -5,14 +5,17 @@
 #   make release      all targets into dist/<VERSION>/ with statements
 #   make sign         sign every statement on the YubiKey (dnseditd cmd/sign --gpg)
 #   make verify       verify every statement + binary with ./cmd/verify
+#   make install      publish the signed dist to the web share + update latest
 #   make dns          print the DNS records a release needs
+#
+# Ship order: release -> sign -> verify -> install (-> publish the dns TXT).
 #
 # Release binaries are stamped with VERSION, TARGET and the git commit
 # ("-dirty" if the tree isn't clean). uSSH compares `--version` output on a
 # host against the signed statement it verified before pushing.
 
 MODULE   := github.com/ivahos/ussh-fsmonitor
-VERSION  ?= 0.1.0
+VERSION  ?= 0.2.0
 COMMIT   := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DIRTY    := $(shell git diff --quiet -- cmd internal go.mod go.sum 2>/dev/null || echo -dirty)
 DIST     := dist/$(VERSION)
@@ -28,7 +31,17 @@ ldflags = -s -w \
   -X $(MODULE)/internal/version.Target=$(1) \
   -X $(MODULE)/internal/version.GitCommit=$(COMMIT)$(DIRTY)
 
-.PHONY: all dev selftest release darwin linux statements sign verify clean
+.PHONY: all dev selftest release darwin linux statements sign verify install clean
+
+# Live web share (SMB). `latest` is a plain file holding the version string,
+# not a symlink — uSSH reads it as text (the signed _release TXT is the real
+# source of truth); serving a symlink would break that fetch.
+WEBHOST ?= /Volumes/Web/ussh.au
+WEBROOT := $(WEBHOST)/fsmonitor
+# Source-of-truth mirror in the macterm repo's website tree (kept under git and
+# deployed with the rest of the site); install copies the release here too so
+# the two never drift.
+MIRROR  ?= $(HOME)/Desktop/Xcode/macterm/website/fsmonitor
 
 all: dev
 
@@ -101,6 +114,35 @@ verify:
 	@for st in $(DIST)/*.statement; do \
 	  go run ./cmd/verify --pub $(RELEASE_KEY) --statement $$st --binary $${st%.statement}; \
 	done
+
+# Publish the built + SIGNED dist to the web share: a fresh version directory
+# with the six files, then point `latest` at it. Deploys what is in dist/ and
+# NEVER rebuilds — a rebuild would overwrite the signed statements with
+# unsigned ones. Refuses to publish if a statement is unsigned or the share
+# isn't mounted. xattr -c + cp -X keep macOS extended attributes off the SMB
+# copy; the darwin binary's embedded codesign is untouched (it isn't an xattr).
+install:
+	@test -d "$(WEBHOST)" || { echo "web share not mounted: $(WEBHOST)"; exit 1; }
+	@test -d "$(DIST)" || { echo "nothing built: $(DIST) — run 'make release' first"; exit 1; }
+	@for st in $(DIST)/*.statement; do \
+	  grep -q '^__SIGNATURE__$$' "$$st" || { echo "unsigned: $$st — run 'make sign' first"; exit 1; }; \
+	done
+	@test ! -d "$(WEBROOT)/$(VERSION)" || echo "note: $(WEBROOT)/$(VERSION) exists — overwriting its files"
+	mkdir -p "$(WEBROOT)/$(VERSION)"
+	xattr -cr $(DIST) 2>/dev/null || true
+	cp -X $(DIST)/ussh-fsmonitor-* "$(WEBROOT)/$(VERSION)/"
+	printf '%s\n' "$(VERSION)" > "$(WEBROOT)/latest"
+	@echo; echo "published $(VERSION) -> $(WEBROOT)/$(VERSION); latest -> $$(cat "$(WEBROOT)/latest")"
+	@ls -l "$(WEBROOT)/$(VERSION)"
+	@# Keep the repo mirror in sync (skipped, not failed, if the repo is absent).
+	@if [ -d "$(dir $(MIRROR))" ]; then \
+	  mkdir -p "$(MIRROR)/$(VERSION)"; \
+	  cp -X $(DIST)/ussh-fsmonitor-* "$(MIRROR)/$(VERSION)/"; \
+	  printf '%s\n' "$(VERSION)" > "$(MIRROR)/latest"; \
+	  echo "mirrored -> $(MIRROR)/$(VERSION) (commit it in the macterm repo)"; \
+	else \
+	  echo "note: repo mirror $(MIRROR) not found — live share updated only"; \
+	fi
 
 clean:
 	rm -rf bin build dist
