@@ -13,6 +13,12 @@ what it does is everything it can do.
 
 - Watches one directory tree (`--root`) with FSEvents on macOS or inotify
   on Linux and writes one JSON object per line to stdout.
+- Or, with one or more `--watch <dir>` (root-relative, `.` = the root),
+  watches ONLY those directories, each non-recursively — what uSSH uses
+  once it knows which folders are open in Finder or Files, so a busy home
+  directory no longer streams every change under it. The handshake carries
+  `scoped` when the build understands `--watch`; uSSH restarts the helper
+  with a new set as folders open and close.
 - Writes nothing else: no files, no sockets, no network, no configuration.
 - Runs as whoever started it. It never escalates and needs no privileges
   beyond reading the tree — the same access SFTP already has.

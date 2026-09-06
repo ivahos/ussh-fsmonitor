@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/ivahos/ussh-fsmonitor/internal/protocol"
@@ -22,6 +23,9 @@ import (
 
 func main() {
 	root := flag.String("root", "", "directory to watch (required unless --version/--selftest)")
+	var watchDirs multiFlag
+	flag.Var(&watchDirs, "watch", "root-relative directory to watch NON-recursively (repeatable; '.' = the root). "+
+		"With any --watch, only those directories are watched and nothing below them")
 	window := flag.Duration("coalesce", 200*time.Millisecond, "batching window for change events")
 	showVersion := flag.Bool("version", false, "print the build statement and exit")
 	runSelftest := flag.Bool("selftest", false, "exercise the watcher on a temporary tree and exit")
@@ -59,10 +63,24 @@ func main() {
 		os.Exit(1)
 	}
 
-	w, err := watch.New(abs, logf)
-	if err != nil {
-		logf("%v", err)
-		os.Exit(1)
+	var w watch.Watcher
+	if len(watchDirs) > 0 {
+		dirs, err := scopedDirs(abs, watchDirs)
+		if err != nil {
+			logf("%v", err)
+			os.Exit(2)
+		}
+		w, err = watch.NewScoped(abs, dirs, logf)
+		if err != nil {
+			logf("%v", err)
+			os.Exit(1)
+		}
+	} else {
+		w, err = watch.New(abs, logf)
+		if err != nil {
+			logf("%v", err)
+			os.Exit(1)
+		}
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -86,7 +104,10 @@ func main() {
 			cancel()
 		}
 	}
-	emit(protocol.Handshake{V: protocol.Version, Caps: w.Caps(), Root: abs, Version: version.Version})
+	// "scoped": this build understands --watch (the consumer checks the
+	// handshake before relying on it; an older helper rejects the flag).
+	caps := append(append([]string{}, w.Caps()...), "scoped")
+	emit(protocol.Handshake{V: protocol.Version, Caps: caps, Root: abs, Version: version.Version})
 
 	co := &watch.Coalescer{Window: *window, Emit: func(batch []watch.Change) {
 		for _, c := range batch {
@@ -126,4 +147,30 @@ func main() {
 			return
 		}
 	}
+}
+
+// multiFlag collects a repeatable string flag.
+type multiFlag []string
+
+func (m *multiFlag) String() string     { return strings.Join(*m, ",") }
+func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
+
+// scopedDirs resolves --watch values to absolute directories under root.
+// Values are root-relative, "." meaning the root; anything that escapes
+// the root is refused.
+func scopedDirs(root string, rels []string) ([]string, error) {
+	seen := map[string]bool{}
+	var dirs []string
+	for _, r := range rels {
+		clean := filepath.Clean("/" + r) // "/a/../b" → "/b"; "." → "/"
+		abs := filepath.Join(root, clean)
+		if abs != root && !strings.HasPrefix(abs, strings.TrimSuffix(root, "/")+"/") {
+			return nil, fmt.Errorf("--watch %q escapes the root", r)
+		}
+		if !seen[abs] {
+			seen[abs] = true
+			dirs = append(dirs, abs)
+		}
+	}
+	return dirs, nil
 }

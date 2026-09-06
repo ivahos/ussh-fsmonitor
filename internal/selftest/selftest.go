@@ -15,6 +15,73 @@ import (
 )
 
 func Run(logf func(string, ...any)) error {
+	if err := runRecursive(logf); err != nil {
+		return err
+	}
+	return runScoped(logf)
+}
+
+// runScoped: --watch semantics. Only the root and "sub" are watched; a
+// change under sub/deep must NOT surface, a new directory in sub must.
+func runScoped(logf func(string, ...any)) error {
+	dir, err := os.MkdirTemp("", "ussh-fsmonitor-selftest-scoped-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	dir, _ = filepath.EvalSymlinks(dir)
+	must := func(err error) {
+		if err != nil {
+			panic(err)
+		}
+	}
+	must(os.MkdirAll(filepath.Join(dir, "sub", "deep"), 0o755))
+
+	w, err := watch.NewScoped(dir, []string{dir, filepath.Join(dir, "sub")}, logf)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	raw := make(chan watch.Change, 1024)
+	seen := map[string]watch.Kind{}
+	done := make(chan struct{})
+	go func() {
+		for c := range raw {
+			seen[c.Path] = c.Kind
+		}
+		close(done)
+	}()
+	errc := make(chan error, 1)
+	go func() { errc <- w.Run(ctx, raw) }()
+	time.Sleep(300 * time.Millisecond)
+
+	must(os.WriteFile(filepath.Join(dir, "a.txt"), []byte("one"), 0o644))
+	must(os.WriteFile(filepath.Join(dir, "sub", "b.txt"), []byte("two"), 0o644))
+	must(os.WriteFile(filepath.Join(dir, "sub", "deep", "hidden.txt"), []byte("three"), 0o644))
+	must(os.Mkdir(filepath.Join(dir, "sub", "new"), 0o755))
+
+	time.Sleep(1500 * time.Millisecond)
+	cancel()
+	if err := <-errc; err != nil {
+		return fmt.Errorf("scoped watcher: %w", err)
+	}
+	close(raw)
+	<-done
+
+	for _, p := range []string{"a.txt", "sub/b.txt", "sub/new"} {
+		if k, ok := seen[p]; !ok || k != watch.Modified {
+			return fmt.Errorf("scoped selftest: expected mod %s, saw %v", p, seen)
+		}
+	}
+	if _, ok := seen["sub/deep/hidden.txt"]; ok {
+		return fmt.Errorf("scoped selftest: sub/deep/hidden.txt must not surface (saw %v)", seen)
+	}
+	logf("scoped selftest ok: %d event(s)", len(seen))
+	return nil
+}
+
+func runRecursive(logf func(string, ...any)) error {
 	dir, err := os.MkdirTemp("", "ussh-fsmonitor-selftest-")
 	if err != nil {
 		return err

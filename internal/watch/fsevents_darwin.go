@@ -75,10 +75,24 @@ type fseventsWatcher struct {
 	lf   *linkFollower
 	logf func(string, ...any)
 	out  chan<- Change
+	// scoped, when non-nil, lists the ONLY directories of interest. FSEvents
+	// streams are recursive by nature, so each is a stream root and events
+	// are kept only for the directory itself and its direct children.
+	scoped map[string]bool
 }
 
 func New(root string, logf func(string, ...any)) (Watcher, error) {
 	return &fseventsWatcher{root: root, lf: newLinkFollower(root), logf: logf}, nil
+}
+
+// NewScoped returns the FSEvents backend for dirs (absolute, cleaned, under
+// root), each watched non-recursively; no symlink following.
+func NewScoped(root string, dirs []string, logf func(string, ...any)) (Watcher, error) {
+	w := &fseventsWatcher{root: root, lf: newLinkFollower(root), logf: logf, scoped: map[string]bool{}}
+	for _, d := range dirs {
+		w.scoped[d] = true
+	}
+	return w, nil
 }
 
 func (w *fseventsWatcher) Caps() []string {
@@ -114,7 +128,21 @@ func (w *fseventsWatcher) Run(ctx context.Context, out chan<- Change) error {
 	h := cgo.NewHandle(w)
 	defer h.Delete()
 
-	roots := append([]string{w.root}, w.discoverTargets()...)
+	var roots []string
+	if w.scoped != nil {
+		for d := range w.scoped {
+			if st, err := os.Stat(d); err == nil && st.IsDir() {
+				roots = append(roots, d)
+			} else if d != w.root {
+				out <- Change{Kind: Deleted, Path: Relative(w.root, d)}
+			}
+		}
+		if len(roots) == 0 {
+			roots = []string{w.root}
+		}
+	} else {
+		roots = append([]string{w.root}, w.discoverTargets()...)
+	}
 	cstrs := make([]*C.char, len(roots))
 	for i, r := range roots {
 		cstrs[i] = C.CString(r)
@@ -155,7 +183,18 @@ func usshFSEventsCallback(handle C.uintptr_t, n C.size_t, paths **C.char, flags 
 			continue
 		}
 		abs := filepath.Clean(C.GoString(cpaths[i]))
-		rels := w.lf.rel(abs) // root-relative, or link-relative under a followed target
+		var rels []string
+		if w.scoped != nil {
+			// Only the watched directories and their direct children.
+			if !w.scoped[abs] && !w.scoped[filepath.Dir(abs)] {
+				continue
+			}
+			if rel := Relative(w.root, abs); rel != "" {
+				rels = []string{rel}
+			}
+		} else {
+			rels = w.lf.rel(abs) // root-relative, or link-relative under a followed target
+		}
 		if len(rels) == 0 {
 			continue
 		}

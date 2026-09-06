@@ -35,6 +35,26 @@ type inotifyWatcher struct {
 	partial bool
 	lf      *linkFollower
 	logf    func(string, ...any)
+	// scoped, when non-nil, lists the ONLY directories watched — each
+	// non-recursively, no symlink following. Set by NewScoped (--watch).
+	scoped map[string]bool
+}
+
+// NewScoped returns the inotify backend watching only dirs (absolute,
+// cleaned, under root), each non-recursively: one watch per directory,
+// nothing below it, no symlink following. A directory that does not exist
+// is skipped (and reported deleted so the consumer can drop it).
+func NewScoped(root string, dirs []string, logf func(string, ...any)) (Watcher, error) {
+	w, err := New(root, logf)
+	if err != nil {
+		return nil, err
+	}
+	iw := w.(*inotifyWatcher)
+	iw.scoped = map[string]bool{}
+	for _, d := range dirs {
+		iw.scoped[d] = true
+	}
+	return iw, nil
 }
 
 // New returns the inotify backend for root (absolute, cleaned).
@@ -149,9 +169,38 @@ func (w *inotifyWatcher) remove(dir string) {
 	}
 }
 
+// addOne watches a single directory, non-recursively.
+func (w *inotifyWatcher) addOne(dir string, out chan<- Change) {
+	if _, ok := w.paths[dir]; ok {
+		return
+	}
+	wd, err := unix.InotifyAddWatch(w.fd, dir, dirMask)
+	if err != nil {
+		if errors.Is(err, unix.ENOENT) || errors.Is(err, unix.ENOTDIR) {
+			if dir != w.root {
+				w.emit(out, Deleted, dir)
+			}
+			return
+		}
+		if errors.Is(err, unix.ENOSPC) {
+			w.partial = true
+		}
+		w.logf("watch %s: %v", dir, err)
+		return
+	}
+	w.wd[wd] = dir
+	w.paths[dir] = wd
+}
+
 func (w *inotifyWatcher) Run(ctx context.Context, out chan<- Change) error {
 	defer unix.Close(w.fd)
-	w.addTree(w.root, out, false, true)
+	if w.scoped != nil {
+		for dir := range w.scoped {
+			w.addOne(dir, out)
+		}
+	} else {
+		w.addTree(w.root, out, false, true)
+	}
 
 	// Wake the blocking poll when ctx ends.
 	pipeR, pipeW, err := os.Pipe()
@@ -227,14 +276,18 @@ func (w *inotifyWatcher) dispatch(b []byte, out chan<- Change) {
 		case mask&(unix.IN_CREATE|unix.IN_MOVED_TO) != 0 && mask&unix.IN_ISDIR != 0:
 			// A new directory may already contain files created before the
 			// watch existed (mkdir -p, untar, git checkout): report them.
+			// Scoped: the directory itself is the news; its contents are
+			// watched only once the consumer asks for them.
 			w.emit(out, Modified, abs)
-			w.addTree(abs, out, true, true)
+			if w.scoped == nil {
+				w.addTree(abs, out, true, true)
+			}
 		default:
 			w.emit(out, Modified, abs)
 			// A symlink appears as a non-directory create; if it points to a
 			// directory out of the tree, start following it now and surface
 			// what it already holds.
-			if mask&(unix.IN_CREATE|unix.IN_MOVED_TO) != 0 {
+			if w.scoped == nil && mask&(unix.IN_CREATE|unix.IN_MOVED_TO) != 0 {
 				if fi, err := os.Lstat(abs); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 					if target, watch := w.lf.consider(abs); watch {
 						w.addTree(target, out, true, false)
