@@ -22,6 +22,15 @@ import (
 )
 
 func main() {
+	// Subcommands first: `hash`, `clone`, `commit` are the block-delta
+	// one-shots (delta.go); everything else is the feed's flag interface.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "hash", "clone", "commit":
+			runDelta(os.Args[1], os.Args[2:])
+			return
+		}
+	}
 	root := flag.String("root", "", "directory to watch (required unless --version/--selftest)")
 	var watchDirs multiFlag
 	flag.Var(&watchDirs, "watch", "root-relative directory to watch NON-recursively (repeatable; '.' = the root). "+
@@ -106,7 +115,9 @@ func main() {
 	}
 	// "scoped": this build understands --watch (the consumer checks the
 	// handshake before relying on it; an older helper rejects the flag).
-	caps := append(append([]string{}, w.Caps()...), "scoped")
+	// "delta": this build has the hash/clone/commit subcommands for
+	// block-delta uploads (uSSH also gates on the version).
+	caps := append(append([]string{}, w.Caps()...), "scoped", "delta")
 	emit(protocol.Handshake{V: protocol.Version, Caps: caps, Root: abs, Version: version.Version})
 
 	co := &watch.Coalescer{Window: *window, Emit: func(batch []watch.Change) {

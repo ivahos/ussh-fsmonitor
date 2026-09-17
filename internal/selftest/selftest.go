@@ -5,12 +5,19 @@
 package selftest
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/ivahos/ussh-fsmonitor/internal/delta"
 	"github.com/ivahos/ussh-fsmonitor/internal/watch"
 )
 
@@ -18,7 +25,69 @@ func Run(logf func(string, ...any)) error {
 	if err := runRecursive(logf); err != nil {
 		return err
 	}
-	return runScoped(logf)
+	if err := runScoped(logf); err != nil {
+		return err
+	}
+	return runDelta(logf)
+}
+
+// runDelta: the block-delta round trip on this host's filesystem — hash,
+// clone (reporting whether reflink works here), patch two blocks the way
+// uSSH does over SFTP, commit, verify the bytes and that the stale-base
+// guard refuses.
+func runDelta(logf func(string, ...any)) error {
+	dir, err := os.MkdirTemp("", "ussh-fsmonitor-selftest-delta-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	const block = 256 * 1024
+	orig := make([]byte, 4*block+999)
+	rand.New(rand.NewSource(7)).Read(orig)
+	path := filepath.Join(dir, "image.bin")
+	if err := os.WriteFile(path, orig, 0o600); err != nil {
+		return err
+	}
+	var out bytes.Buffer
+	if err := delta.Hash(path, block, &out); err != nil {
+		return fmt.Errorf("delta hash: %w", err)
+	}
+	var hdr delta.HashHeader
+	first, _, _ := strings.Cut(out.String(), "\n")
+	if err := json.Unmarshal([]byte(first), &hdr); err != nil {
+		return fmt.Errorf("delta hash header: %w", err)
+	}
+	if hdr.Blocks != 5 || strings.Count(out.String(), "\n") != 7 {
+		return fmt.Errorf("delta hash: %d blocks, %d lines", hdr.Blocks, strings.Count(out.String(), "\n"))
+	}
+	cl, err := delta.Clone(path, &hdr.Stat)
+	if err != nil {
+		return fmt.Errorf("delta clone: %w", err)
+	}
+	next := append([]byte{}, orig...)
+	copy(next[block:], bytes.Repeat([]byte{0x5A}, block))
+	next = next[:3*block+17] // shrink, too
+	f, err := os.OpenFile(cl.Path, os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	f.WriteAt(next[block:2*block], block)
+	f.Close()
+	sum := sha256.Sum256(next)
+	if _, err := delta.Commit(delta.CommitRequest{File: path, From: cl.Path, Size: int64(len(next)),
+		SHA256: hex.EncodeToString(sum[:]), Base: &hdr.Stat}); err != nil {
+		return fmt.Errorf("delta commit: %w", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(got, next) {
+		return fmt.Errorf("delta selftest: committed bytes differ")
+	}
+	stale := hdr.Stat
+	if _, err := delta.Clone(path, &stale); delta.AsError(err).Code != "changed" {
+		return fmt.Errorf("delta selftest: stale base not refused (%v)", err)
+	}
+	logf("delta selftest ok: clone via %s", cl.Method)
+	return nil
 }
 
 // runScoped: --watch semantics. Only the root and "sub" are watched; a

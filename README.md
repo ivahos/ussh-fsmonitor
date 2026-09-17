@@ -22,10 +22,51 @@ what it does is everything it can do.
 - Writes nothing else: no files, no sockets, no network, no configuration.
 - Runs as whoever started it. It never escalates and needs no privileges
   beyond reading the tree — the same access SFTP already has.
+- Has three one-shot subcommands, `hash`, `clone` and `commit`, for
+  block-delta uploads of large files (below): they read the file, make a
+  private copy next to it, and rename the copy over the original once uSSH
+  has verified it. Nothing else on disk is ever written.
 - Exits the moment stdin closes (uSSH disconnects or disables the feed).
   It is never a daemon and never survives the session that started it.
 - Reports itself honestly: `overflow` when the kernel dropped events, and
   `partial` in the handshake when a tree exceeds the inotify watch limit.
+
+## Block-delta uploads: `hash`, `clone`, `commit`
+
+Three one-shot subcommands (0.4.0+, handshake cap `delta`) let uSSH
+replace a large file on the host by sending only the blocks that changed
+— the case that matters on an asymmetric link is a multi-gigabyte disk
+image (VeraCrypt, sparse images, databases) that gets a few blocks
+rewritten in place. uSSH runs them over the same exec channel, as your
+user; the helper never receives file content from the app.
+
+```
+ussh-fsmonitor hash --file IMG [--block 1048576]
+{"v":1,"t":"hash","file":"/home/ivar/vault.hc","size":4831838208,"mtime_s":1758071234,"mtime_ns":0,"block":1048576,"blocks":4608,"alg":"sha256"}
+<64 hex chars>                       one line per block, in order
+…
+{"t":"done","sha256":"<whole file>","size":4831838208,"mtime_s":1758071234,"mtime_ns":0}
+
+ussh-fsmonitor clone --file IMG --base-size N --base-mtime-s S --base-mtime-ns NS
+{"t":"clone","path":"/home/ivar/.vault.hc.ussh-delta-3f9c2a1b7d0e","method":"reflink","size":…}
+
+ussh-fsmonitor commit --file IMG --from CLONE --size N --sha256 H --mtime-s S --mtime-ns NS --base-size … --base-mtime-s … --base-mtime-ns …
+{"t":"done","file":"/home/ivar/vault.hc","sha256":"H","size":N,"mtime_s":S,"mtime_ns":NS}
+```
+
+The flow: uSSH hashes the new local file and asks `hash` for the host's
+digests; `clone` makes a private copy next to the file (an instant
+copy-on-write clone on APFS, btrfs and XFS with reflink, a byte copy
+elsewhere); uSSH writes the differing blocks into the clone with plain
+SFTP writes at their offsets; `commit` truncates to the final size,
+checks the whole-file digest, stamps the mtime, and renames the clone
+over the original. The original is never patched in place: a dropped
+connection leaves it untouched and only the clone to remove. The
+`--base-*` stat taken at hash time is checked again by `clone` and
+`commit`, so a file that changed on the host meanwhile is refused
+(`{"t":"error","code":"changed",…}`, exit 1) and uSSH falls back to a
+full upload. `--selftest` exercises the round trip on the host's own
+filesystem and reports whether reflink works there.
 
 ## Protocol (stdout, newline-delimited JSON)
 
