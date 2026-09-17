@@ -76,6 +76,7 @@ filesystem and reports whether reflink works there.
 {"t":"del","p":"build"}             path disappeared
 {"t":"overflow"}                    events were lost: do a full rescan
 {"t":"ping"}                        every 30 s when idle
+{"t":"log","msg":"...","lvl":"info"} a diagnostic uSSH copies into its own log
 ```
 
 Paths are relative to the root. Bursts are coalesced (`--coalesce`,

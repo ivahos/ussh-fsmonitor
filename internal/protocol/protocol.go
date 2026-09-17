@@ -6,6 +6,7 @@
 //	{"t":"del","p":"build"}              path disappeared
 //	{"t":"overflow"}                     events were lost — do a full resync
 //	{"t":"ping"}                         liveness, every PingInterval
+//	{"t":"log","msg":"...","lvl":"info"}  a diagnostic for the client to log
 //
 // Paths are relative to the root, slash-separated, never absolute, never
 // containing "..". The consumer re-enumerates the parent container of each
@@ -36,6 +37,11 @@ type Handshake struct {
 type Event struct {
 	T string `json:"t"`
 	P string `json:"p,omitempty"`
+	// Log events carry a human-readable message (and level) instead of a
+	// path; uSSH copies them into its own diagnostics so what the helper
+	// did on the host is visible in the client's log.
+	Msg string `json:"msg,omitempty"`
+	Lvl string `json:"lvl,omitempty"`
 }
 
 const (
@@ -43,6 +49,7 @@ const (
 	Deleted  = "del"
 	Overflow = "overflow"
 	Ping     = "ping"
+	Log      = "log"
 )
 
 // Writer serialises lines to an io.Writer, one JSON object per line,
