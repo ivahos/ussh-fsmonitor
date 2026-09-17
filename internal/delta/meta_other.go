@@ -2,4 +2,4 @@
 
 package delta
 
-func copyXattrs(src, dst string, logf func(string, ...any)) {}
+func copyXattrs(src, dst string, logf func(string, ...any)) int { return 0 }

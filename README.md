@@ -66,7 +66,11 @@ connection leaves it untouched and only the clone to remove. The
 `commit`, so a file that changed on the host meanwhile is refused
 (`{"t":"error","code":"changed",…}`, exit 1) and uSSH falls back to a
 full upload. `--selftest` exercises the round trip on the host's own
-filesystem and reports whether reflink works there.
+filesystem and reports whether reflink works there. Internal steps the app can't
+see over its data stream — copied metadata, a rollback, a recovery — are
+logged to stderr, which uSSH captures alongside the result; the one-shots
+keep stdout to their result JSON, unlike the feed, which carries diagnostics
+as `log` events because it has no separate channel.
 
 ## Protocol (stdout, newline-delimited JSON)
 

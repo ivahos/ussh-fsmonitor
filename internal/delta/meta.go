@@ -43,5 +43,13 @@ func copyMetadata(src, dst string, logf func(string, ...any)) {
 			}
 		}
 	}
-	copyXattrs(src, dst, logf)
+	n := copyXattrs(src, dst, logf)
+	// One concise line: the app never sees the clone's metadata work over
+	// the data stream, so this is a genuine internal op worth logging — but
+	// a summary, never one line per attribute.
+	if n > 0 {
+		logf("metadata: copied owner, perms and %d xattr(s) to %s", n, dst)
+	} else {
+		logf("metadata: copied owner and perms to %s", dst)
+	}
 }
