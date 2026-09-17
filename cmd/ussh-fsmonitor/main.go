@@ -40,16 +40,11 @@ func main() {
 	runSelftest := flag.Bool("selftest", false, "exercise the watcher on a temporary tree and exit")
 	flag.Parse()
 
-	// Until the protocol writer exists, log to stderr only. Once the feed
-	// is streaming, emitLog is wired so the same diagnostics also ride
-	// stdout as {"t":"log"} events and reach uSSH's own log.
-	var emitLog func(string)
+	// logf is LOCAL diagnostics (stderr): for someone running the binary by
+	// hand or --selftest, and free to be as chatty as debugging needs. It
+	// never touches the protocol stream.
 	logf := func(format string, a ...any) {
-		msg := fmt.Sprintf(format, a...)
-		fmt.Fprintf(os.Stderr, "ussh-fsmonitor: %s\n", msg)
-		if emitLog != nil {
-			emitLog(msg)
-		}
+		fmt.Fprintf(os.Stderr, "ussh-fsmonitor: "+format+"\n", a...)
 	}
 
 	switch {
@@ -127,11 +122,21 @@ func main() {
 	// block-delta uploads (uSSH also gates on the version).
 	caps := append(append([]string{}, w.Caps()...), "scoped", "delta")
 	emit(protocol.Handshake{V: protocol.Version, Caps: caps, Root: abs, Version: version.Version})
-	// From here on, logf diagnostics also reach uSSH over stdout. Emitting
-	// only from the main goroutine (as the loop below does) keeps the
-	// shared writer single-threaded.
-	emitLog = func(msg string) { emit(protocol.Event{T: protocol.Log, Msg: msg, Lvl: "info"}) }
-	emitLog(fmt.Sprintf("watching %s (%s)", abs, strings.Join(caps, ",")))
+
+	// applog is the CURATED stream to uSSH. It carries only what the app
+	// cannot already infer from the events it receives (mod/del/overflow/
+	// ping) or from the handshake it just read — a failure reason, a
+	// degradation. It must NEVER narrate those events (no "told the app
+	// about X") and never log about logging: either would double the change
+	// stream or storm it. So there is deliberately no startup line here (the
+	// handshake already told the app the root and caps). Emitted only from
+	// the main goroutine below, so the shared stdout writer stays
+	// single-threaded.
+	applog := func(level, format string, a ...any) {
+		msg := fmt.Sprintf(format, a...)
+		fmt.Fprintf(os.Stderr, "ussh-fsmonitor: %s\n", msg)
+		emit(protocol.Event{T: protocol.Log, Msg: msg, Lvl: level})
+	}
 
 	co := &watch.Coalescer{Window: *window, Emit: func(batch []watch.Change) {
 		for _, c := range batch {
@@ -161,7 +166,7 @@ func main() {
 		case err := <-errc:
 			co.Flush()
 			if err != nil && ctx.Err() == nil {
-				logf("watcher failed: %v", err)
+				applog("error", "watcher failed: %v", err)
 				os.Exit(1)
 			}
 			return

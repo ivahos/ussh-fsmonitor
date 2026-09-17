@@ -76,13 +76,17 @@ filesystem and reports whether reflink works there.
 {"t":"del","p":"build"}             path disappeared
 {"t":"overflow"}                    events were lost: do a full rescan
 {"t":"ping"}                        every 30 s when idle
-{"t":"log","msg":"...","lvl":"info"} a diagnostic uSSH copies into its own log
+{"t":"log","msg":"...","lvl":"warn"} a diagnostic uSSH copies into its own log
 ```
 
 Paths are relative to the root. Bursts are coalesced (`--coalesce`,
 default 200 ms) into one line per path. Renames surface as `del` of the
 old path and `mod` of the new; creates and modifies are both `mod` — the
-consumer re-lists the parent either way. stderr carries diagnostics only.
+consumer re-lists the parent either way. stderr carries diagnostics only. The
+`log` stream is curated: it carries only what the client can't already
+infer from the other events or the handshake (a failure reason, a
+degradation), never a narration of the changes it just sent and never a log
+about logging.
 
 ## Building
 
