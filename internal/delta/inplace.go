@@ -169,7 +169,7 @@ func InPlaceCommit(req InPlaceRequest) (*CommitResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	res := &CommitResult{T: "done", File: abs, Stat: statOf(fi)}
+	res := &CommitResult{T: "done", File: abs, Stat: statOf(fi), Nlink: nlinkOf(fi)}
 	if req.SHA256 != "" {
 		res.SHA256 = req.SHA256
 	}

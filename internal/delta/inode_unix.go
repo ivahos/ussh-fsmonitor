@@ -14,3 +14,10 @@ func inodeOf(fi fs.FileInfo) uint64 {
 	}
 	return 0
 }
+
+func nlinkOf(fi fs.FileInfo) int64 {
+	if st, ok := fi.Sys().(*unix.Stat_t); ok {
+		return int64(st.Nlink)
+	}
+	return 1
+}

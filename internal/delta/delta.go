@@ -82,6 +82,7 @@ type HashHeader struct {
 	T    string `json:"t"` // "hash"
 	File string `json:"file"`
 	Stat
+	Nlink  int64  `json:"nlink"` // hard-link count; >1 means edits must stay in place
 	Block  int64  `json:"block"`
 	Blocks int64  `json:"blocks"`
 	Alg    string `json:"alg"` // "sha256"
@@ -122,7 +123,7 @@ func Hash(path string, block int64, out io.Writer) error {
 	before := statOf(fi)
 	blocks := (before.Size + block - 1) / block
 	enc := json.NewEncoder(out)
-	if err := enc.Encode(HashHeader{V: 1, T: "hash", File: abs, Stat: before, Block: block, Blocks: blocks, Alg: "sha256"}); err != nil {
+	if err := enc.Encode(HashHeader{V: 1, T: "hash", File: abs, Stat: before, Nlink: nlinkOf(fi), Block: block, Blocks: blocks, Alg: "sha256"}); err != nil {
 		return err
 	}
 	whole := sha256.New()
@@ -269,6 +270,7 @@ type CommitResult struct {
 	File   string `json:"file"`
 	SHA256 string `json:"sha256,omitempty"`
 	Stat
+	Nlink int64 `json:"nlink"` // hard-link count of the committed file
 }
 
 // Commit verifies the patched clone and renames it over the original.
@@ -348,7 +350,7 @@ func Commit(req CommitRequest) (*CommitResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &CommitResult{T: "done", File: abs, SHA256: digest, Stat: statOf(fi)}, nil
+	return &CommitResult{T: "done", File: abs, SHA256: digest, Stat: statOf(fi), Nlink: nlinkOf(fi)}, nil
 }
 
 func syncDir(dir string) {
@@ -359,3 +361,30 @@ func syncDir(dir string) {
 }
 
 func timeNowNano() int64 { return time.Now().UnixNano() }
+
+// StatResult is the `stat` command's one line: enough for uSSH to decide
+// whether a write must stay in place (nlink > 1) without reading the file.
+type StatResult struct {
+	T    string `json:"t"` // "stat"
+	File string `json:"file"`
+	Stat
+	Nlink int64 `json:"nlink"`
+}
+
+// StatFile reports a file's size, mtime and hard-link count — one stat, no
+// read. uSSH uses it to auto-detect hard-linked files (which SFTP's own stat
+// can't reveal, having no link-count field) and route their edits in place.
+func StatFile(path string) (*StatResult, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	fi, err := os.Stat(abs)
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, errorf("usage", "%s is not a regular file", abs)
+	}
+	return &StatResult{T: "stat", File: abs, Stat: statOf(fi), Nlink: nlinkOf(fi)}, nil
+}

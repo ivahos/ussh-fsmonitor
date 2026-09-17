@@ -27,6 +27,10 @@ func runDelta(cmd string, args []string) {
 		runRecover(args, logf)
 		return
 	}
+	if cmd == "stat" {
+		runStat(args)
+		return
+	}
 	fs := flag.NewFlagSet(cmd, flag.ExitOnError)
 	file := fs.String("file", "", "the file (required)")
 	var (
@@ -133,6 +137,23 @@ func runRecover(args []string, logf func(string, ...any)) {
 	for _, r := range results {
 		_ = enc.Encode(r)
 	}
+}
+
+// stat prints one file's size, mtime and hard-link count as JSON — the
+// cheap probe uSSH uses to auto-detect hard-linked files.
+func runStat(args []string) {
+	fs := flag.NewFlagSet("stat", flag.ExitOnError)
+	file := fs.String("file", "", "the file (required)")
+	_ = fs.Parse(args)
+	if *file == "" {
+		fmt.Fprintln(os.Stderr, "usage: ussh-fsmonitor stat --file F")
+		os.Exit(2)
+	}
+	res, err := delta.StatFile(*file)
+	if err != nil {
+		fail(delta.AsError(err), 1)
+	}
+	_ = json.NewEncoder(os.Stdout).Encode(res)
 }
 
 // readIndices parses ascending block indices from a file (whitespace- or

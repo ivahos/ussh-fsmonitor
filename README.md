@@ -41,6 +41,7 @@ rewritten in place. uSSH runs them over the same exec channel, as your
 user; the helper never receives file content from the app.
 
 ```
+ussh-fsmonitor stat --file IMG            # size, mtime, hard-link count (nlink), one stat
 ussh-fsmonitor hash --file IMG [--block 1048576]
 {"v":1,"t":"hash","file":"/home/ivar/vault.hc","size":4831838208,"mtime_s":1758071234,"mtime_ns":0,"block":1048576,"blocks":4608,"alg":"sha256"}
 <64 hex chars>                       one line per block, in order

@@ -26,7 +26,7 @@ func main() {
 	// one-shots (delta.go); everything else is the feed's flag interface.
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
-		case "hash", "clone", "commit", "recover":
+		case "hash", "clone", "commit", "recover", "stat":
 			runDelta(os.Args[1], os.Args[2:])
 			return
 		}

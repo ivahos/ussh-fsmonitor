@@ -195,3 +195,21 @@ func mustAbs(t *testing.T, p string) string {
 	}
 	return a
 }
+
+func TestStatNlink(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a")
+	b := filepath.Join(dir, "b")
+	os.WriteFile(a, []byte("data"), 0o644)
+	s1, err := StatFile(a)
+	if err != nil || s1.Nlink != 1 {
+		t.Fatalf("single link: %+v %v", s1, err)
+	}
+	if err := os.Link(a, b); err != nil {
+		t.Skipf("hard links unsupported here: %v", err)
+	}
+	s2, _ := StatFile(a)
+	if s2.Nlink != 2 {
+		t.Fatalf("after hard link nlink=%d, want 2", s2.Nlink)
+	}
+}
