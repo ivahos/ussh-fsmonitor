@@ -79,7 +79,7 @@ func TestHashCloneCommit(t *testing.T) {
 	next = append(next, bytes.Repeat([]byte{0xCD}, block/2)...)
 
 	base := hdr.Stat
-	cl, err := Clone(path, &base)
+	cl, err := Clone(path, &base, nil)
 	if err != nil {
 		t.Fatalf("clone: %v", err)
 	}
@@ -133,10 +133,10 @@ func TestGuards(t *testing.T) {
 	}
 	stale := hdr.Stat
 	stale.Size++
-	if _, err := Clone(path, &stale); AsError(err).Code != "changed" {
+	if _, err := Clone(path, &stale, nil); AsError(err).Code != "changed" {
 		t.Fatalf("stale clone: %v", err)
 	}
-	cl, err := Clone(path, &hdr.Stat)
+	cl, err := Clone(path, &hdr.Stat, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,18 +151,18 @@ func TestGuards(t *testing.T) {
 		t.Fatal("original touched")
 	}
 	// Too small: blocks missing.
-	cl, _ = Clone(path, nil)
+	cl, _ = Clone(path, nil, nil)
 	if _, err := Commit(CommitRequest{File: path, From: cl.Path, Size: 20}); AsError(err).Code != "mismatch" {
 		t.Fatalf("short clone: %v", err)
 	}
 	// Original changed after hashing: refused.
-	cl, _ = Clone(path, nil)
+	cl, _ = Clone(path, nil, nil)
 	os.Chtimes(path, time.Now().Add(time.Hour), time.Now().Add(time.Hour))
 	if _, err := Commit(CommitRequest{File: path, From: cl.Path, Size: 11, Base: &hdr.Stat}); AsError(err).Code != "changed" {
 		t.Fatalf("changed original: %v", err)
 	}
 	// Shrink: a larger clone is truncated to --size.
-	cl, _ = Clone(path, nil)
+	cl, _ = Clone(path, nil, nil)
 	if _, err := Commit(CommitRequest{File: path, From: cl.Path, Size: 5}); err != nil {
 		t.Fatalf("shrink: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestCopyFallback(t *testing.T) {
 	path := filepath.Join(dir, "f")
 	content := bytes.Repeat([]byte("copy me "), 100_000)
 	os.WriteFile(path, content, 0o600)
-	cl, err := Clone(path, nil)
+	cl, err := Clone(path, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

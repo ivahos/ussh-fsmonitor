@@ -168,7 +168,10 @@ type CloneResult struct {
 // reflink (APFS clonefile, Linux FICLONE on btrfs/XFS) costs nothing;
 // anything else falls back to a byte copy. With a base stat, the file
 // must still match it.
-func Clone(path string, base *Stat) (*CloneResult, error) {
+func Clone(path string, base *Stat, logf func(string, ...any)) (*CloneResult, error) {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return nil, err
@@ -196,10 +199,10 @@ func Clone(path string, base *Stat) (*CloneResult, error) {
 			return nil, errorf("io", "copy %s: %v", abs, err)
 		}
 	}
-	if err := os.Chmod(dst, fi.Mode().Perm()); err != nil {
-		os.Remove(dst)
-		return nil, err
-	}
+	// The clone becomes the file after the rename, so it must carry the
+	// original's ownership, permissions and extended attributes (APFS
+	// clonefile already did; the Linux/byte-copy paths need this).
+	copyMetadata(abs, dst, logf)
 	cfi, err := os.Stat(dst)
 	if err != nil {
 		os.Remove(dst)
@@ -213,12 +216,19 @@ func Clone(path string, base *Stat) (*CloneResult, error) {
 var reflinkFn = reflink
 
 func tempName(abs string) (string, error) {
+	dir, name := filepath.Split(abs)
+	return filepath.Join(dir, "."+name+".ussh-delta-"+randHex()), nil
+}
+
+// randHex is 12 hex chars of randomness for temp/clone/journal names.
+func randHex() string {
 	var r [6]byte
 	if _, err := rand.Read(r[:]); err != nil {
-		return "", err
+		// crypto/rand does not fail in practice; a time-based fallback
+		// keeps names unique enough for a scratch sibling if it ever does.
+		return hex.EncodeToString([]byte(fmt.Sprintf("%d", timeNowNano())))
 	}
-	dir, name := filepath.Split(abs)
-	return filepath.Join(dir, "."+name+".ussh-delta-"+hex.EncodeToString(r[:])), nil
+	return hex.EncodeToString(r[:])
 }
 
 func byteCopy(src, dst string, perm os.FileMode) error {
@@ -347,3 +357,5 @@ func syncDir(dir string) {
 		d.Close()
 	}
 }
+
+func timeNowNano() int64 { return time.Now().UnixNano() }
