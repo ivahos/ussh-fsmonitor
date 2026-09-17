@@ -90,7 +90,10 @@ consumer re-lists the parent either way. stderr carries diagnostics only. The
 `log` stream is curated: it carries only what the client can't already
 infer from the other events or the handshake (a failure reason, a
 degradation), never a narration of the changes it just sent and never a log
-about logging.
+about logging. It is emitted only with `--log`, which uSSH
+passes only while it is actually storing these diagnostics (file logging on
+and the Finder category enabled) and drops otherwise, so an idle log stream
+never costs anything on the connection.
 
 ## Building
 

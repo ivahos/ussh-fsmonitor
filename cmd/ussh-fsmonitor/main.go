@@ -38,6 +38,7 @@ func main() {
 	window := flag.Duration("coalesce", 200*time.Millisecond, "batching window for change events")
 	showVersion := flag.Bool("version", false, "print the build statement and exit")
 	runSelftest := flag.Bool("selftest", false, "exercise the watcher on a temporary tree and exit")
+	logEvents := flag.Bool("log", false, "emit {\"t\":\"log\"} diagnostic events on stdout — uSSH sets this only while it will store them, so bandwidth isn't spent on logs it would discard")
 	flag.Parse()
 
 	// logf is LOCAL diagnostics (stderr): for someone running the binary by
@@ -135,7 +136,12 @@ func main() {
 	applog := func(level, format string, a ...any) {
 		msg := fmt.Sprintf(format, a...)
 		fmt.Fprintf(os.Stderr, "ussh-fsmonitor: %s\n", msg)
-		emit(protocol.Event{T: protocol.Log, Msg: msg, Lvl: level})
+		// Only stream log events when uSSH asked for them (--log): with
+		// logging off or the Finder category disabled it discards them, so
+		// emitting would waste the channel.
+		if *logEvents {
+			emit(protocol.Event{T: protocol.Log, Msg: msg, Lvl: level})
+		}
 	}
 
 	co := &watch.Coalescer{Window: *window, Emit: func(batch []watch.Change) {
