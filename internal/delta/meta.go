@@ -5,7 +5,7 @@ import (
 	"io/fs"
 	"os"
 
-	"golang.org/x/sys/unix"
+	"syscall"
 )
 
 // copyMetadata replicates the source file's ownership and permissions onto
@@ -32,7 +32,7 @@ func copyMetadata(src, dst string, logf func(string, ...any)) {
 	if err := os.Chmod(dst, fi.Mode().Perm()); err != nil {
 		logf("metadata: chmod %s: %v", dst, err)
 	}
-	if st, ok := fi.Sys().(*unix.Stat_t); ok {
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
 		if err := os.Chown(dst, int(st.Uid), int(st.Gid)); err != nil {
 			// Same-owner chown is a no-op success; a cross-owner one needs
 			// privilege. Either way the clone is already owned by whoever
