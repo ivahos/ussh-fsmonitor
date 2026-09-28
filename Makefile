@@ -15,7 +15,7 @@
 # host against the signed statement it verified before pushing.
 
 MODULE   := github.com/ivahos/ussh-fsmonitor
-VERSION  ?= 0.4.1
+VERSION  ?= 0.5.0
 COMMIT   := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DIRTY    := $(shell git diff --quiet -- cmd internal go.mod go.sum 2>/dev/null || echo -dirty)
 DIST     := dist/$(VERSION)
@@ -52,7 +52,7 @@ dev:
 selftest: dev
 	./bin/ussh-fsmonitor --selftest
 
-release: darwin linux statements
+release: darwin linux freebsd statements
 	@echo; echo "release $(VERSION) ($(COMMIT)$(DIRTY)) in $(DIST):"; ls -l $(DIST)
 	@$(MAKE) --no-print-directory dns
 
@@ -82,6 +82,14 @@ linux:
 	@mkdir -p $(DIST)
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$(call ldflags,linux-amd64)" -o $(DIST)/ussh-fsmonitor-linux-amd64 ./cmd/ussh-fsmonitor
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$(call ldflags,linux-arm64)" -o $(DIST)/ussh-fsmonitor-linux-arm64 ./cmd/ussh-fsmonitor
+
+# The kqueue backend (internal/watch/kqueue_bsd.go) builds for every BSD, but
+# only FreeBSD is shipped: it is the one that turns up as a NAS, a router
+# appliance or a server. The others are one GOOS away if anyone asks.
+freebsd:
+	@mkdir -p $(DIST)
+	CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -trimpath -ldflags "$(call ldflags,freebsd-amd64)" -o $(DIST)/ussh-fsmonitor-freebsd-amd64 ./cmd/ussh-fsmonitor
+	CGO_ENABLED=0 GOOS=freebsd GOARCH=arm64 go build -trimpath -ldflags "$(call ldflags,freebsd-arm64)" -o $(DIST)/ussh-fsmonitor-freebsd-arm64 ./cmd/ussh-fsmonitor
 
 # One statement per binary: what it is, for which target, and its digest.
 # This text is what gets signed; the binary's own --version prints the

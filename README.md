@@ -11,8 +11,9 @@ what it does is everything it can do.
 
 ## What it does — and doesn't
 
-- Watches one directory tree (`--root`) with FSEvents on macOS or inotify
-  on Linux and writes one JSON object per line to stdout.
+- Watches one directory tree (`--root`) with FSEvents on macOS, inotify on
+  Linux or kqueue on the BSDs, and writes one JSON object per line to
+  stdout.
 - Or, with one or more `--watch <dir>` (root-relative, `.` = the root),
   watches ONLY those directories, each non-recursively — what uSSH uses
   once it knows which folders are open in Finder or Files, so a busy home
@@ -29,7 +30,28 @@ what it does is everything it can do.
 - Exits the moment stdin closes (uSSH disconnects or disables the feed).
   It is never a daemon and never survives the session that started it.
 - Reports itself honestly: `overflow` when the kernel dropped events, and
-  `partial` in the handshake when a tree exceeds the inotify watch limit.
+  `partial` in the handshake when a tree exceeds the inotify watch limit
+  (Linux) or the descriptor budget (BSD).
+
+### A note on the BSD backend
+
+kqueue registers against an open descriptor, and a directory's events say
+only that *something* inside it changed — never what. So each watched
+directory keeps a snapshot of its entry names and re-lists on `NOTE_WRITE`
+to work out which paths arrived or vanished. kqueue also has no equivalent
+of inotify's `IN_MODIFY`, so a directory watch alone would miss writes to
+the files inside it: every regular file in a watched directory gets its own
+descriptor too.
+
+That is the backend's one real cost, and it is why `--watch` matters here
+more than elsewhere. Scoped to the handful of directories a user actually
+has open — how uSSH always runs it — the cost is a few dozen descriptors.
+An unscoped whole-tree feed over a large home directory will reach the
+budget (the soft `RLIMIT_NOFILE`, raised to the hard limit at start, less
+headroom) and report itself `partial`, exactly as inotify does when it runs
+out of watches. A file that cannot be opened for reading simply goes
+unwatched: its creation, rename and deletion still surface through its
+directory's diff; only in-place writes to it are missed.
 
 ## Block-delta uploads: `hash`, `clone`, `commit`
 
@@ -101,11 +123,13 @@ never costs anything on the connection.
 ```
 make            # ./bin/ussh-fsmonitor for this machine
 make selftest   # runs the watcher against a temporary tree
-make release    # dist/<version>/: darwin-universal, linux-amd64, linux-arm64 + statements
+make release    # dist/<version>/: darwin-universal, linux-amd64/arm64,
+                #                 freebsd-amd64/arm64 + statements
 ```
 
 The macOS build uses cgo for FSEvents and is a universal binary; the Linux
-builds are static (`CGO_ENABLED=0`). Every binary reports its identity:
+and FreeBSD builds are static (`CGO_ENABLED=0`). Every binary reports its
+identity:
 
 ```
 $ ussh-fsmonitor --version
