@@ -51,3 +51,12 @@ func fsTypeName(dir string) (string, error) {
 	}
 	return best, nil
 }
+
+func mountTable() []mount {
+	mountsOnce.Do(loadMounts)
+	out := make([]mount, 0, len(mountTypes))
+	for point, typ := range mountTypes {
+		out = append(out, mount{point: point, fsType: typ})
+	}
+	return out
+}

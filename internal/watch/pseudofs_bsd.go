@@ -12,12 +12,34 @@ func fsTypeName(dir string) (string, error) {
 	if err := unix.Statfs(dir, &st); err != nil {
 		return "", err
 	}
-	b := make([]byte, 0, len(st.Fstypename))
-	for _, c := range st.Fstypename {
+	return cstr(st.Fstypename[:]), nil
+}
+
+// cstr turns a NUL-terminated fixed-size C string field into a Go string.
+func cstr(f []byte) string {
+	for i, c := range f {
 		if c == 0 {
-			break
+			return string(f[:i])
 		}
-		b = append(b, byte(c))
 	}
-	return string(b), nil
+	return string(f)
+}
+
+// mountTable reads the whole mount table in one call — the BSD/macOS way,
+// and the only way to see a jail's or container's nested devfs.
+func mountTable() []mount {
+	n, err := unix.Getfsstat(nil, unix.MNT_NOWAIT)
+	if err != nil || n <= 0 {
+		return nil
+	}
+	buf := make([]unix.Statfs_t, n)
+	n, err = unix.Getfsstat(buf, unix.MNT_NOWAIT)
+	if err != nil {
+		return nil
+	}
+	out := make([]mount, 0, n)
+	for _, st := range buf[:n] {
+		out = append(out, mount{point: cstr(st.Mntonname[:]), fsType: cstr(st.Fstypename[:])})
+	}
+	return out
 }

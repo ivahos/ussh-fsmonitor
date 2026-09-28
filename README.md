@@ -42,6 +42,11 @@ what it does is everything it can do.
   tmpfs share a magic number and `/tmp` must not be skipped — never the
   path, so a real directory called `dev` is safe and the same filesystem
   mounted elsewhere is still caught.
+  Found from the mount table, not by walking, so a mount at any depth is
+  caught: a jail or a container brings its own devfs with it (OPNsense
+  mounts one at `/var/unbound/dev` and another at
+  `/var/captiveportal/zone0/dev`; Docker puts `/proc` and `/sys` inside
+  each container root).
 - Reports those directories to the consumer as `mounts` in the handshake.
   uSSH reaches the host over SFTP, which has no `statfs` and no mount
   table, so from there `/dev` is just a directory with a lot in it; the

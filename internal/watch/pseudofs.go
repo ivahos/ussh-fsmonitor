@@ -1,9 +1,9 @@
 package watch
 
 import (
-	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // Pseudo filesystems — devfs, procfs, sysfs and friends — hold no user
@@ -49,32 +49,39 @@ func isPseudoFS(dir string) (string, bool) {
 	return name, pseudoTypes[name]
 }
 
-// PseudoMountsUnder lists the immediate children of root that sit on a
-// filesystem holding no user data, as root-relative names.
+// PseudoMountsUnder lists every pseudo filesystem mounted at or below root,
+// as root-relative paths.
 //
-// The helper is the only party that can answer this: the File Provider side
-// reaches the host over SFTP, which has no statfs and no mount table, so
-// from there /dev is just a directory with 512 entries in it. Reporting the
-// names in the handshake lets the extension leave them out of its listings
-// as well — without them the whole tree still gets enumerated into the sync
-// engine even though nothing watches it.
-//
-// One level deep: these are mount points, and a pseudo filesystem nested
-// deeper is both rare and cheap to leave in.
+// It reads the mount table rather than walking the tree: one syscall instead
+// of a recursive descent, and — the reason it matters — it finds mounts at
+// any depth. A jail or a container brings its own devfs with it, nested
+// wherever it lives: OPNsense mounts one at /var/unbound/dev and another at
+// /var/captiveportal/zone0/dev, and Docker puts /proc and /sys inside each
+// container root under /var/lib/docker. Looking only at the root's immediate
+// children would miss every one of them, which is the wrong answer for
+// exactly the routers and NAS boxes this is for.
 func PseudoMountsUnder(root string) []string {
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return nil
-	}
+	root = filepath.Clean(root)
+	prefix := strings.TrimSuffix(root, "/") + "/"
 	var out []string
-	for _, e := range entries {
-		if !e.IsDir() {
+	for _, m := range mountTable() {
+		if !pseudoTypes[m.fsType] {
 			continue
 		}
-		if _, pseudo := isPseudoFS(filepath.Join(root, e.Name())); pseudo {
-			out = append(out, e.Name())
+		point := filepath.Clean(m.point)
+		switch {
+		case point == root:
+			continue // the root itself; nothing to exclude from its own listing
+		case strings.HasPrefix(point, prefix):
+			out = append(out, strings.TrimPrefix(point, prefix))
 		}
 	}
 	sort.Strings(out)
 	return out
+}
+
+// mount is one entry of the host's mount table.
+type mount struct {
+	point  string
+	fsType string
 }

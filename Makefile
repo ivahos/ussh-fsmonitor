@@ -18,7 +18,7 @@
 # host against the signed statement it verified before pushing.
 
 MODULE   := github.com/ivahos/ussh-fsmonitor
-VERSION  ?= 0.6.0
+VERSION  ?= 0.7.0
 COMMIT   := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DIRTY    := $(shell git diff --quiet -- cmd internal go.mod go.sum 2>/dev/null || echo -dirty)
 DIST     := dist/$(VERSION)
