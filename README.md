@@ -32,6 +32,21 @@ what it does is everything it can do.
 - Reports itself honestly: `overflow` when the kernel dropped events, and
   `partial` in the handshake when a tree exceeds the inotify watch limit
   (Linux) or the descriptor budget (BSD).
+- Never crosses into a pseudo filesystem — devfs, procfs, sysfs, cgroup,
+  autofs and friends. They hold no user data and synthesise their contents
+  per read (`/dev` on a FreeBSD box is several hundred device nodes that
+  come and go as hardware is probed), so watching them is pure cost and
+  pure noise. It matters most for a root of `/`, which is what a router or
+  NAS bookmark tends to be. The test is the filesystem TYPE — `statfs` on
+  the BSDs and macOS, `/proc/self/mounts` on Linux, where devtmpfs and
+  tmpfs share a magic number and `/tmp` must not be skipped — never the
+  path, so a real directory called `dev` is safe and the same filesystem
+  mounted elsewhere is still caught.
+- Reports those directories to the consumer as `mounts` in the handshake.
+  uSSH reaches the host over SFTP, which has no `statfs` and no mount
+  table, so from there `/dev` is just a directory with a lot in it; the
+  handshake is the only way it can know to leave it out of its own
+  listings.
 
 ### A note on the BSD backend
 

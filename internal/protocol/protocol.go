@@ -28,8 +28,13 @@ const PingInterval = 30 * time.Second
 const Version = 1
 
 type Handshake struct {
-	V       int      `json:"v"`
-	Caps    []string `json:"caps"`
+	V    int      `json:"v"`
+	Caps []string `json:"caps"`
+	// Root-relative directories that sit on a pseudo filesystem
+	// (devfs, procfs, sysfs …). The watcher skips them, and the File
+	// Provider side — which only has SFTP and so cannot tell — leaves
+	// them out of its listings. Absent on helpers before 0.6.0.
+	Mounts  []string `json:"mounts,omitempty"`
 	Root    string   `json:"root"`
 	Version string   `json:"version"`
 }

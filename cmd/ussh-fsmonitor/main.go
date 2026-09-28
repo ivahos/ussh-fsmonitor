@@ -121,8 +121,14 @@ func main() {
 	// handshake before relying on it; an older helper rejects the flag).
 	// "delta": this build has the hash/clone/commit subcommands for
 	// block-delta uploads (uSSH also gates on the version).
-	caps := append(append([]string{}, w.Caps()...), "scoped", "delta")
-	emit(protocol.Handshake{V: protocol.Version, Caps: caps, Root: abs, Version: version.Version})
+	// "mounts": the handshake carries the pseudo-filesystem directories
+	// found under the root. Only the helper can know them — SFTP has no
+	// statfs and no mount table, so from uSSH's side /dev is just a
+	// directory with several hundred entries in it.
+	caps := append(append([]string{}, w.Caps()...), "scoped", "delta", "mounts")
+	mounts := watch.PseudoMountsUnder(abs)
+	emit(protocol.Handshake{V: protocol.Version, Caps: caps, Root: abs,
+		Version: version.Version, Mounts: mounts})
 
 	// applog is the CURATED stream to uSSH. It carries only what the app
 	// cannot already infer from the events it receives (mod/del/overflow/

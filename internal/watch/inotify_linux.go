@@ -131,6 +131,10 @@ func (w *inotifyWatcher) addTree(dir string, out chan<- Change, report, followLi
 		if _, ok := w.paths[p]; ok {
 			return nil
 		}
+		if name, pseudo := isPseudoFS(p); pseudo {
+			w.logf("skipping %s: %s holds no user data", p, name)
+			return filepath.SkipDir
+		}
 		// Leave headroom for other inotify users of this uid.
 		if len(w.wd) >= w.limit-64 {
 			if !w.partial {
@@ -172,6 +176,10 @@ func (w *inotifyWatcher) remove(dir string) {
 // addOne watches a single directory, non-recursively.
 func (w *inotifyWatcher) addOne(dir string, out chan<- Change) {
 	if _, ok := w.paths[dir]; ok {
+		return
+	}
+	if name, pseudo := isPseudoFS(dir); pseudo {
+		w.logf("not watching %s: %s holds no user data", dir, name)
 		return
 	}
 	wd, err := unix.InotifyAddWatch(w.fd, dir, dirMask)

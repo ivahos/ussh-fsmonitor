@@ -57,6 +57,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/cgo"
+	"strings"
 	"unsafe"
 )
 
@@ -79,6 +80,12 @@ type fseventsWatcher struct {
 	// streams are recursive by nature, so each is a stream root and events
 	// are kept only for the directory itself and its direct children.
 	scoped map[string]bool
+	// Subtrees to drop events from: pseudo filesystems mounted under the
+	// root. An FSEvents stream cannot be told to skip a subtree the way
+	// inotify and kqueue simply decline to watch one, so the filtering
+	// happens on the way out. On macOS this also covers /home and /net,
+	// which are autofs and would otherwise wake the automounter.
+	skip []string
 }
 
 func New(root string, logf func(string, ...any)) (Watcher, error) {
@@ -113,6 +120,11 @@ func (w *fseventsWatcher) discoverTargets() []string {
 		if err != nil {
 			return nil
 		}
+		if d.IsDir() && p != w.root {
+			if _, pseudo := isPseudoFS(p); pseudo {
+				return filepath.SkipDir
+			}
+		}
 		if d.Type()&os.ModeSymlink != 0 {
 			if target, watch := w.lf.consider(p); watch {
 				targets = append(targets, target)
@@ -123,6 +135,37 @@ func (w *fseventsWatcher) discoverTargets() []string {
 	return targets
 }
 
+// findPseudoMounts lists the immediate children of root that live on a
+// filesystem holding no user data. One level is enough: these are mount
+// points, and a mount nested deeper is both rare and harmless to watch.
+func (w *fseventsWatcher) findPseudoMounts() []string {
+	entries, err := os.ReadDir(w.root)
+	if err != nil {
+		return nil
+	}
+	var skip []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		p := filepath.Join(w.root, e.Name())
+		if name, pseudo := isPseudoFS(p); pseudo {
+			w.logf("skipping %s: %s holds no user data", p, name)
+			skip = append(skip, p)
+		}
+	}
+	return skip
+}
+
+func (w *fseventsWatcher) skipped(abs string) bool {
+	for _, s := range w.skip {
+		if abs == s || strings.HasPrefix(abs, s+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 func (w *fseventsWatcher) Run(ctx context.Context, out chan<- Change) error {
 	w.out = out
 	h := cgo.NewHandle(w)
@@ -131,6 +174,10 @@ func (w *fseventsWatcher) Run(ctx context.Context, out chan<- Change) error {
 	var roots []string
 	if w.scoped != nil {
 		for d := range w.scoped {
+			if name, pseudo := isPseudoFS(d); pseudo {
+				w.logf("not watching %s: %s holds no user data", d, name)
+				continue
+			}
 			if st, err := os.Stat(d); err == nil && st.IsDir() {
 				roots = append(roots, d)
 			} else if d != w.root {
@@ -141,6 +188,7 @@ func (w *fseventsWatcher) Run(ctx context.Context, out chan<- Change) error {
 			roots = []string{w.root}
 		}
 	} else {
+		w.skip = w.findPseudoMounts()
 		roots = append([]string{w.root}, w.discoverTargets()...)
 	}
 	cstrs := make([]*C.char, len(roots))
@@ -183,6 +231,9 @@ func usshFSEventsCallback(handle C.uintptr_t, n C.size_t, paths **C.char, flags 
 			continue
 		}
 		abs := filepath.Clean(C.GoString(cpaths[i]))
+		if w.skipped(abs) {
+			continue
+		}
 		var rels []string
 		if w.scoped != nil {
 			// Only the watched directories and their direct children.

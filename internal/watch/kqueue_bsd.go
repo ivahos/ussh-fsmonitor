@@ -242,6 +242,10 @@ func (w *kqueueWatcher) addTree(dir string, out chan<- Change, report, followLin
 			w.watch(p, false)
 			return nil
 		}
+		if name, pseudo := isPseudoFS(p); pseudo {
+			w.logf("skipping %s: %s holds no user data", p, name)
+			return filepath.SkipDir
+		}
 		if !w.watch(p, true) {
 			if w.partial {
 				return filepath.SkipDir
@@ -266,6 +270,10 @@ func (w *kqueueWatcher) addTree(dir string, out chan<- Change, report, followLin
 // addOne watches a single directory and the regular files directly inside
 // it, non-recursively.
 func (w *kqueueWatcher) addOne(dir string, out chan<- Change) {
+	if name, pseudo := isPseudoFS(dir); pseudo {
+		w.logf("not watching %s: %s holds no user data", dir, name)
+		return
+	}
 	if !w.watch(dir, true) {
 		if _, err := os.Stat(dir); err != nil && dir != w.root {
 			w.emit(out, Deleted, dir)
