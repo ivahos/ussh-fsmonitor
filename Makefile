@@ -9,9 +9,17 @@
 #                     unsigned, verify everything, publish, print the DNS
 #   make publish      publish an already-signed dist (no build, no sign)
 #   make dns          print the DNS records a release needs
+#   make dns-update   publish the release TXT with nsupdate (needs TSIG_KEY;
+#                     without one it just prints, so nothing breaks)
 #
 # `make install` runs the whole sequence, so the ship order below is what it
-# does for you: release -> sign -> verify -> publish (-> publish the dns TXT).
+# does for you: release -> sign -> verify -> publish -> dns.
+#
+# The TSIG key for the last step should be scoped server-side to this one
+# name and type. It is not a secret that protects anything much — the record
+# only says which version to fetch, and every binary is still checked against
+# the Ed25519 release key before it is pushed to a host — but a key that can
+# rewrite a zone is a key worth not minting.
 #
 # Release binaries are stamped with VERSION, TARGET and the git commit
 # ("-dirty" if the tree isn't clean). uSSH compares `--version` output on a
@@ -29,13 +37,29 @@ DIST     := dist/$(VERSION)
 SIGN_TOOL   ?= $(HOME)/Desktop/Xcode/DnsEditor/dnseditd/cmd/sign
 RELEASE_KEY := $(shell cat RELEASE_KEY.hex)
 
+# The release pointer uSSH resolves (DNSSEC-validated) to learn the current
+# version. `make install` publishes it itself when a TSIG key is present —
+# one that the server permits for this ONE name and type and nothing else,
+# so the worst a stolen copy can do is lie about a version number that is
+# still useless without the Ed25519 release key. The key lives outside the
+# repo and is never read by anything but nsupdate.
+TSIG_KEY   ?= $(HOME)/.config/ussh-fsmonitor/release-tsig.key
+DNS_SERVER ?= nameserver.ih36.net
+DNS_ZONE   ?= ussh.au
+DNS_NAME   := _release._ussh-fsmonitor.$(DNS_ZONE)
+DNS_TTL    ?= 300
+# Asking the binary is the only honest source: the protocol number is
+# compiled into it, and a hand-typed one in the TXT is a lie waiting to
+# happen.
+PROTOCOL    = $(shell go run ./cmd/ussh-fsmonitor --version 2>/dev/null | awk '/^protocol/{print $$2}')
+
 ldflags = -s -w \
   -X $(MODULE)/internal/version.Version=$(VERSION) \
   -X $(MODULE)/internal/version.Target=$(1) \
   -X $(MODULE)/internal/version.GitCommit=$(COMMIT)$(DIRTY)
 
 .PHONY: all dev selftest release darwin linux freebsd statements sign verify \
-        install publish preflight ship-build clean
+        install publish preflight ship-build dns-update clean
 
 # Live web share (SMB). `latest` is a plain file holding the version string,
 # not a symlink — uSSH reads it as text (the signed _release TXT is the real
@@ -65,6 +89,36 @@ release: darwin linux freebsd statements
 # — DNSSEC-validated — to learn the current version before it downloads
 # from https://ussh.au/fsmonitor/<version>/; the key record already exists
 # and only changes on rotation.
+# Publish the release pointer with nsupdate, then read it back from the
+# authoritative server and refuse to call it done unless the version matches
+# and the answer is signed — an unsigned record is one uSSH will reject, and
+# finding that out from a user is not the plan.
+#
+# Without a key this degrades to printing the records, so the Makefile still
+# works for anyone who does not hold one.
+dns-update:
+	@if [ ! -f "$(TSIG_KEY)" ]; then \
+	  echo "no TSIG key at $(TSIG_KEY) — publish this by hand:"; \
+	  $(MAKE) --no-print-directory dns; \
+	  exit 0; \
+	fi
+	@proto="$(PROTOCOL)"; \
+	test -n "$$proto" || { echo "could not read the protocol number from the binary"; exit 1; }; \
+	txt="version=$(VERSION) protocol=$$proto built=$$(date -u +%Y-%m-%d)"; \
+	echo "updating $(DNS_NAME) -> \"$$txt\" via $(DNS_SERVER)"; \
+	printf 'server %s\nzone %s.\nupdate delete %s. TXT\nupdate add %s. %s IN TXT "%s"\nsend\nanswer\n' \
+	  "$(DNS_SERVER)" "$(DNS_ZONE)" "$(DNS_NAME)" "$(DNS_NAME)" "$(DNS_TTL)" "$$txt" \
+	  | nsupdate -k "$(TSIG_KEY)" || { echo "nsupdate FAILED — the files are published but the pointer still names the old version"; exit 1; }; \
+	sleep 1; \
+	got=$$(dig +short @$(DNS_SERVER) TXT $(DNS_NAME) | tr -d '"'); \
+	case "$$got" in \
+	  "version=$(VERSION) "*) echo "  published: $$got";; \
+	  *) echo "  MISMATCH: server says '$$got'"; exit 1;; \
+	esac; \
+	dig +dnssec @$(DNS_SERVER) TXT $(DNS_NAME) | grep -q RRSIG \
+	  || { echo "  WARNING: no RRSIG on the record — uSSH validates DNSSEC and will reject it"; exit 1; }; \
+	echo "  signed (RRSIG present)"
+
 dns:
 	@echo
 	@echo "DNS records to publish (zone ussh.au, DNSSEC-signed):"
@@ -148,7 +202,7 @@ install:
 	@$(MAKE) --no-print-directory sign
 	@$(MAKE) --no-print-directory verify
 	@$(MAKE) --no-print-directory publish
-	@$(MAKE) --no-print-directory dns
+	@$(MAKE) --no-print-directory dns-update
 
 # Everything that can be known before the expensive, interactive parts. The
 # YubiKey PIN and a few minutes of cross-compiling are a poor way to find
