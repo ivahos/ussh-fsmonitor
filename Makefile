@@ -5,10 +5,13 @@
 #   make release      all targets into dist/<VERSION>/ with statements
 #   make sign         sign every statement on the YubiKey (dnseditd cmd/sign --gpg)
 #   make verify       verify every statement + binary with ./cmd/verify
-#   make install      publish the signed dist to the web share + update latest
+#   make install      THE SHIP COMMAND: build what's missing, sign what's
+#                     unsigned, verify everything, publish, print the DNS
+#   make publish      publish an already-signed dist (no build, no sign)
 #   make dns          print the DNS records a release needs
 #
-# Ship order: release -> sign -> verify -> install (-> publish the dns TXT).
+# `make install` runs the whole sequence, so the ship order below is what it
+# does for you: release -> sign -> verify -> publish (-> publish the dns TXT).
 #
 # Release binaries are stamped with VERSION, TARGET and the git commit
 # ("-dirty" if the tree isn't clean). uSSH compares `--version` output on a
@@ -31,7 +34,8 @@ ldflags = -s -w \
   -X $(MODULE)/internal/version.Target=$(1) \
   -X $(MODULE)/internal/version.GitCommit=$(COMMIT)$(DIRTY)
 
-.PHONY: all dev selftest release darwin linux statements sign verify install clean
+.PHONY: all dev selftest release darwin linux freebsd statements sign verify \
+        install publish preflight ship-build clean
 
 # Live web share (SMB). `latest` is a plain file holding the version string,
 # not a symlink — uSSH reads it as text (the signed _release TXT is the real
@@ -118,10 +122,14 @@ sign:
 	done; \
 	gpg-connect-agent "RELOADAGENT" /bye >/dev/null 2>&1; gpgconf --kill scdaemon 2>/dev/null; true
 
+# Every statement and binary, checked against the published key. Strict: one
+# bad pair fails the whole target, because `install` runs this automatically
+# and a warning nobody reads is not a check.
 verify:
-	@for st in $(DIST)/*.statement; do \
-	  go run ./cmd/verify --pub $(RELEASE_KEY) --statement $$st --binary $${st%.statement}; \
-	done
+	@fail=0; for st in $(DIST)/*.statement; do \
+	  go run ./cmd/verify --pub $(RELEASE_KEY) --statement $$st --binary $${st%.statement} || fail=1; \
+	done; \
+	test $$fail -eq 0 || { echo "VERIFY FAILED — nothing published"; exit 1; }
 
 # Publish the built + SIGNED dist to the web share: a fresh version directory
 # with the six files, then point `latest` at it. Deploys what is in dist/ and
@@ -129,7 +137,44 @@ verify:
 # unsigned ones. Refuses to publish if a statement is unsigned or the share
 # isn't mounted. xattr -c + cp -X keep macOS extended attributes off the SMB
 # copy; the darwin binary's embedded codesign is untouched (it isn't an xattr).
+# The one command. Each step is skipped when it has already been done, so
+# running it twice is safe and the second run publishes the same bytes.
+# Sequenced in the recipe, not as prerequisites: prerequisite order is not
+# guaranteed under `make -j`, and signing before the binaries exist (or
+# publishing before verifying) is not a race worth having.
 install:
+	@$(MAKE) --no-print-directory preflight
+	@$(MAKE) --no-print-directory ship-build
+	@$(MAKE) --no-print-directory sign
+	@$(MAKE) --no-print-directory verify
+	@$(MAKE) --no-print-directory publish
+	@$(MAKE) --no-print-directory dns
+
+# Everything that can be known before the expensive, interactive parts. The
+# YubiKey PIN and a few minutes of cross-compiling are a poor way to find
+# out the web share isn't mounted.
+preflight:
+	@test -d "$(WEBHOST)" || { echo "web share not mounted: $(WEBHOST)"; exit 1; }
+	@test -d "$(SIGN_TOOL)" || { echo "SIGN_TOOL=$(SIGN_TOOL) not found"; exit 1; }
+	@test -n "$(RELEASE_KEY)" || { echo "RELEASE_KEY.hex is empty"; exit 1; }
+	@test ! -d "$(WEBROOT)/$(VERSION)" || echo "note: $(WEBROOT)/$(VERSION) exists — its files will be overwritten"
+	@echo "preflight ok: publishing $(VERSION) from $(COMMIT)$(DIRTY)"
+
+# Build the dist only when it isn't there. A rebuild would rewrite the
+# statements, and a rewritten statement has no signature — so an existing
+# VERSION is never silently rebuilt. Bump VERSION for a new build; that is
+# the gate, and it is why the commit check below is a warning worth reading.
+ship-build:
+	@if [ -d "$(DIST)" ] && ls $(DIST)/*.statement >/dev/null 2>&1; then \
+	  echo "using existing $(DIST) (bump VERSION to build afresh)"; \
+	  built=$$(awk '/^commit /{print $$2; exit}' $$(ls $(DIST)/*.statement | head -1)); \
+	  now=$(COMMIT)$(DIRTY); \
+	  test "$$built" = "$$now" || echo "  WARNING: built from $$built, HEAD is $$now — bump VERSION if the code changed"; \
+	else \
+	  $(MAKE) --no-print-directory release; \
+	fi
+
+publish:
 	@test -d "$(WEBHOST)" || { echo "web share not mounted: $(WEBHOST)"; exit 1; }
 	@test -d "$(DIST)" || { echo "nothing built: $(DIST) — run 'make release' first"; exit 1; }
 	@for st in $(DIST)/*.statement; do \
